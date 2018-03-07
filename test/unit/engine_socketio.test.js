@@ -4,9 +4,11 @@
 
 'use strict';
 
+const sinon = require('sinon');
 const EventEmitter = require('events');
 const test = require('tape');
 const SocketIoEngine = require('../../lib/engine_socketio');
+const processor = require('./engine_socketio.test.processor.js');
 
 const createServer = require('../targets/simple_socketio');
 
@@ -40,7 +42,31 @@ const scriptWithoutEmits = {
   }]
 };
 
-test('SocketIo enginge interface', function(t) {
+const scriptWithHooks = {
+  config: {
+    target: 'http://localhost:10335',
+    processor: './engine_socketio.test.processor.js'
+  },
+  scenarios: [
+    {
+      name: 'WithHooks',
+      flow: [
+        {
+          beforeRequest: 'flowBeforeRequest',
+          afterResponse: 'flowAfterResponse',
+          emit: {
+            beforeRequest: 'emitBeforeRequest',
+            afterResponse: 'emitAfterResponse',
+            channel: 'echo',
+            data: 'hello Socket.io'
+          }
+        }
+      ]
+    }
+  ]
+};
+
+test('SocketIo engine interface', function(t) {
   const target = createServer();
 
   target.listen(10333, function() {
@@ -54,6 +80,39 @@ test('SocketIo enginge interface', function(t) {
 
     target.close();
     t.end();
+  });
+});
+
+test('Processor hooks', function(t) {
+  const target = createServer();
+  const hookSpy = sinon.spy((outgoingOrResponse, context, ee, next) => {
+    outgoingOrResponse.counter += 1;
+    next();
+  });
+  sinon.stub(processor, 'flowBeforeRequest', hookSpy);
+  sinon.stub(processor, 'emitBeforeRequest', hookSpy);
+  sinon.stub(processor, 'flowAfterResponse', hookSpy);
+  sinon.stub(processor, 'emitAfterResponse', hookSpy);
+
+  target.listen(10335, function() {
+    const engine = new SocketIoEngine(scriptWithHooks);
+    const ee = new EventEmitter();
+
+    const runScenario = engine.createScenario(script.scenarios[0], ee);
+
+    t.assert(engine, 'Can init the engine');
+    t.assert(typeof runScenario === 'function', 'Can create a virtual user function');
+
+    runScenario({ vars: {} }, (err, outgoingOrResponse) => {
+      t.assert(!err, 'Scenario completed with no errors');
+      t.equal(hookSpy.callCount, 4);
+      t.deepEqual(hookSpy.firstCall, []);
+      t.deepEqual(hookSpy.secondCall, []);
+      t.deepEqual(outgoingOrResponse, {});
+
+      t.end();
+      target.close();
+    });
   });
 });
 
@@ -77,3 +136,4 @@ test('Passive listening', function(t) {
     });
   });
 });
+
